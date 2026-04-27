@@ -1,130 +1,45 @@
+using BepInEx.Logging;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 
 namespace Il2CppDumper
 {
-    class Program
+    /// <summary>
+    /// Provides extension methods for logging and processing IL2CPP files.
+    /// </summary>
+    public class ExtensionMethods
     {
-        private static Config config;
+        /// <summary>
+        /// The logger instance for the Il2CppDumper extension methods.
+        /// </summary>
+        public static ManualLogSource logger;
 
-        [STAThread]
-        static void Main(string[] args)
+        static ExtensionMethods()
         {
-            config = JsonSerializer.Deserialize<Config>(File.ReadAllText(AppDomain.CurrentDomain.BaseDirectory + @"config.json"));
-            string il2cppPath = null;
-            string metadataPath = null;
-            string outputDir = null;
-
-            if (args.Length == 1)
-            {
-                if (args[0] == "-h" || args[0] == "--help" || args[0] == "/?" || args[0] == "/h")
-                {
-                    ShowHelp();
-                    return;
-                }
-            }
-            if (args.Length > 3)
-            {
-                ShowHelp();
-                return;
-            }
-            if (args.Length > 1)
-            {
-                foreach (var arg in args)
-                {
-                    if (File.Exists(arg))
-                    {
-                        var file = File.ReadAllBytes(arg);
-                        if (BitConverter.ToUInt32(file, 0) == 0xFAB11BAF)
-                        {
-                            metadataPath = arg;
-                        }
-                        else
-                        {
-                            il2cppPath = arg;
-                        }
-                    }
-                    else if (Directory.Exists(arg))
-                    {
-                        outputDir = Path.GetFullPath(arg) + Path.DirectorySeparatorChar;
-                    }
-                }
-            }
-            outputDir ??= AppDomain.CurrentDomain.BaseDirectory;
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                if (il2cppPath == null)
-                {
-                    var ofd = new OpenFileDialog
-                    {
-                        Filter = "Il2Cpp binary file|*.*"
-                    };
-                    if (ofd.ShowDialog())
-                    {
-                        il2cppPath = ofd.FileName;
-                        ofd.Filter = "global-metadata|global-metadata.dat";
-                        if (ofd.ShowDialog())
-                        {
-                            metadataPath = ofd.FileName;
-                        }
-                        else
-                        {
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        return;
-                    }
-                }
-            }
-            if (il2cppPath == null)
-            {
-                ShowHelp();
-                return;
-            }
-            if (metadataPath == null)
-            {
-                ExtensionMethods.logger.LogError($"Metadata file not found or encrypted.");
-            }
-            else
-            {
-                try
-                {
-                    if (Init(il2cppPath, metadataPath, out var metadata, out var il2Cpp))
-                    {
-                        Dump(metadata, il2Cpp, outputDir);
-                    }
-                }
-                catch (Exception e)
-                {
-                    ExtensionMethods.logger.LogInfo(e);
-                }
-            }
-            if (config.RequireAnyKey)
-            {
-                ExtensionMethods.logger.LogInfo("Press any key to exit...");
-                Console.ReadKey(true);
-            }
+            logger = new ManualLogSource("Il2CppDumper");
+            Logger.Sources.Add(logger);
         }
 
-        static void ShowHelp()
-        {
-            ExtensionMethods.logger.LogInfo($"usage: {AppDomain.CurrentDomain.FriendlyName} <executable-file> <global-metadata> <output-directory>");
-        }
-
-        private static bool Init(string il2cppPath, string metadataPath, out Metadata metadata, out Il2Cpp il2Cpp)
+        /// <summary>
+        /// Initializes the IL2CPP metadata and IL2CPP file.
+        /// </summary>
+        /// <param name="il2cppBytes">The IL2CPP file bytes.</param>
+        /// <param name="metadataBytes">The metadata file bytes.</param>
+        /// <param name="metadata">The initialized metadata object.</param>
+        /// <param name="il2Cpp">The initialized IL2CPP object.</param>
+        /// <returns><c>true</c> if initialization is successful; otherwise, <c>false</c>.</returns>
+        public static bool Init(byte[] il2cppBytes, byte[] metadataBytes, out Metadata metadata, out Il2Cpp il2Cpp)
         {
             ExtensionMethods.logger.LogInfo("Initializing metadata...");
-            var metadataBytes = File.ReadAllBytes(metadataPath);
+            //var metadataBytes = File.ReadAllBytes(metadataPath);
             metadata = new Metadata(new MemoryStream(metadataBytes));
             ExtensionMethods.logger.LogInfo($"Metadata Version: {metadata.Version}");
 
             ExtensionMethods.logger.LogInfo("Initializing il2cpp file...");
-            var il2cppBytes = File.ReadAllBytes(il2cppPath);
+            //var il2cppBytes = File.ReadAllBytes(il2cppPath);
             var il2cppMagic = BitConverter.ToUInt32(il2cppBytes, 0);
             var il2CppMemory = new MemoryStream(il2cppBytes);
             switch (il2cppMagic)
@@ -178,10 +93,10 @@ namespace Il2CppDumper
                     il2Cpp = new Macho(il2CppMemory);
                     break;
             }
-            var version = config.ForceIl2CppVersion ? config.ForceVersion : metadata.Version;
+            var version = metadata.Version;
             il2Cpp.SetProperties(version, metadata.metadataUsagesCount);
             ExtensionMethods.logger.LogInfo($"Il2Cpp Version: {il2Cpp.Version}");
-            if (config.ForceDump || il2Cpp.CheckDump())
+            if (false || il2Cpp.CheckDump())
             {
                 if (il2Cpp is ElfBase elf)
                 {
@@ -192,7 +107,7 @@ namespace Il2CppDumper
                     {
                         il2Cpp.ImageBase = DumpAddr;
                         il2Cpp.IsDumped = true;
-                        if (!config.NoRedirectedPointer)
+                        if (!false)
                         {
                             elf.Reload();
                         }
@@ -213,9 +128,10 @@ namespace Il2CppDumper
                     if (!flag && il2Cpp is PE)
                     {
                         ExtensionMethods.logger.LogInfo("Use custom PE loader");
-                        il2Cpp = PELoader.Load(il2cppPath);
+                        /*il2Cpp = PELoader.Load(il2cppBytes);
                         il2Cpp.SetProperties(version, metadata.metadataUsagesCount);
-                        flag = il2Cpp.PlusSearch(metadata.methodDefs.Count(x => x.methodIndex >= 0), metadata.typeDefs.Length, metadata.imageDefs.Length);
+                        flag = il2Cpp.PlusSearch(metadata.methodDefs.Count(x => x.methodIndex >= 0), metadata.typeDefs.Length, metadata.imageDefs.Length);*/
+                        throw new NotImplementedException("Doubt this case will be triggered.");
                     }
                 }
                 if (!flag)
@@ -244,33 +160,33 @@ namespace Il2CppDumper
             }
             catch (Exception e)
             {
-                ExtensionMethods.logger.LogInfo(e);
-                ExtensionMethods.logger.LogError("An error occurred while processing.");
+                logger.LogError(e);
+                logger.LogError("ERROR: An error occurred while processing.");
                 return false;
             }
             return true;
         }
 
-        private static void Dump(Metadata metadata, Il2Cpp il2Cpp, string outputDir)
+        /// <summary>
+        /// Generates Cecil assemblies from the metadata and IL2CPP.
+        /// </summary>
+        /// <param name="metadata">The metadata object.</param>
+        /// <param name="il2Cpp">The IL2CPP object.</param>
+        /// <param name="Assemblies">The generated AssemblyDefinitions.</param>
+        public static void GenerateCecilAssemblies(Metadata metadata, Il2Cpp il2Cpp, out List<Mono.Cecil.AssemblyDefinition> Assemblies)
         {
-            ExtensionMethods.logger.LogInfo("Dumping...");
+            ExtensionMethods.logger.LogInfo("Generating AssemblyDefinition...");
             var executor = new Il2CppExecutor(metadata, il2Cpp);
-            var decompiler = new Il2CppDecompiler(executor);
-            decompiler.Decompile(config, outputDir);
-            ExtensionMethods.logger.LogInfo("Done!");
-            if (config.GenerateStruct)
+            var dummy = new DummyAssemblyGenerator(executor, true);
+            foreach (var assembly in dummy.Assemblies)
             {
-                ExtensionMethods.logger.LogInfo("Generate struct...");
-                var scriptGenerator = new StructGenerator(executor);
-                scriptGenerator.WriteScript(outputDir);
-                ExtensionMethods.logger.LogInfo("Done!");
+                if (!assembly.MainModule.Name.EndsWith(".dll"))
+                {
+                    logger.LogWarning($"Fixing {assembly.MainModule.Name}'s Module Name.");
+                    assembly.MainModule.Name += ".dll";
+                }
             }
-            if (config.GenerateDummyDll)
-            {
-                ExtensionMethods.logger.LogInfo("Generate dummy dll...");
-                DummyAssemblyExporter.Export(executor, outputDir, config.DummyDllAddToken);
-                ExtensionMethods.logger.LogInfo("Done!");
-            }
+            Assemblies = dummy.Assemblies;
         }
     }
 }
