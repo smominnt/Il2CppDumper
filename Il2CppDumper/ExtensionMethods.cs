@@ -1,3 +1,4 @@
+using AsmResolver.DotNet;
 using BepInEx.Logging;
 using System;
 using System.Collections.Generic;
@@ -173,17 +174,20 @@ namespace Il2CppDumper
         /// <param name="metadata">The metadata object.</param>
         /// <param name="il2Cpp">The IL2CPP object.</param>
         /// <param name="Assemblies">The generated AssemblyDefinitions.</param>
-        public static void GenerateCecilAssemblies(Metadata metadata, Il2Cpp il2Cpp, out List<Mono.Cecil.AssemblyDefinition> Assemblies)
+        public static void GenerateAssemblies(Metadata metadata, Il2Cpp il2Cpp, out List<AssemblyDefinition> Assemblies)
         {
             ExtensionMethods.logger.LogInfo("Generating AssemblyDefinition...");
             var executor = new Il2CppExecutor(metadata, il2Cpp);
             var dummy = new DummyAssemblyGenerator(executor, true);
             foreach (var assembly in dummy.Assemblies)
             {
-                if (!assembly.MainModule.Name.EndsWith(".dll"))
+                var module = assembly.ManifestModule;
+                string moduleName = module.Name ?? string.Empty;
+
+                if (!moduleName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogWarning($"Fixing {assembly.MainModule.Name}'s Module Name.");
-                    assembly.MainModule.Name += ".dll";
+                    logger.LogWarning($"Fixing {moduleName}'s Module Name.");
+                    module.Name = moduleName + ".dll";
                 }
             }
             Assemblies = dummy.Assemblies;
