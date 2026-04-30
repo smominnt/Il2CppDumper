@@ -196,9 +196,8 @@ namespace Il2CppDumper
                         {
                             if (executor.TryGetDefaultValue(fieldDefault.typeIndex, fieldDefault.dataIndex, out var value))
                             {
-                                // AsmResolver uses the Constant class to wrap native default values
-                                var elementType = fieldSignature.FieldType.ElementType;
-                                fieldDefinition.Constant = new Constant(elementType, new DataBlobSignature((byte[])value));
+                                var blob = CreateBlobFromObject(value);
+                                fieldDefinition.Constant = new Constant(fieldSignature.FieldType.ElementType, blob);
                             }
                             else
                             {
@@ -282,7 +281,8 @@ namespace Il2CppDumper
                             {
                                 if (executor.TryGetDefaultValue(parameterDefault.typeIndex, parameterDefault.dataIndex, out var value))
                                 {
-                                    parameterDefinition.Constant = new Constant(paramSignature.ElementType, new DataBlobSignature((byte[])value));
+                                    var blob = CreateBlobFromObject(value);
+                                    parameterDefinition.Constant = new Constant(paramSignature.ElementType, blob);
                                 }
                                 else
                                 {
@@ -749,8 +749,8 @@ namespace Il2CppDumper
 
                 case Il2CppTypeEnum.IL2CPP_TYPE_GENERICINST:
                     {
-                        var genericInst = il2Cpp.MapVATR<Il2CppGenericInst>(il2CppType.data.generic_class);
                         var genericClass = il2Cpp.MapVATR<Il2CppGenericClass>(il2CppType.data.generic_class);
+                        var genericInst = il2Cpp.MapVATR<Il2CppGenericInst>(genericClass.context.class_inst);
 
                         Il2CppType baseIl2CppType;
                         if (il2Cpp.Version >= 27)
@@ -788,6 +788,29 @@ namespace Il2CppDumper
                 default:
                     return factory.Object; // Fallback to avoid crashing the dumper
             }
+        }
+
+
+        public static DataBlobSignature? CreateBlobFromObject(object value)
+        {
+            return value switch
+            {
+                null => DataBlobSignature.FromNull(),
+                bool b => DataBlobSignature.FromValue(b),
+                char c => DataBlobSignature.FromValue(c),
+                byte b => DataBlobSignature.FromValue(b),
+                sbyte sb => DataBlobSignature.FromValue(sb),
+                ushort us => DataBlobSignature.FromValue(us),
+                short s => DataBlobSignature.FromValue(s),
+                uint ui => DataBlobSignature.FromValue(ui),
+                int i => DataBlobSignature.FromValue(i),
+                ulong ul => DataBlobSignature.FromValue(ul),
+                long l => DataBlobSignature.FromValue(l),
+                float f => DataBlobSignature.FromValue(f),
+                double d => DataBlobSignature.FromValue(d),
+                string s => DataBlobSignature.FromValue(s),
+                _ => throw new NotSupportedException($"Unsupported constant type: {value.GetType()}")
+            };
         }
     }
 }
