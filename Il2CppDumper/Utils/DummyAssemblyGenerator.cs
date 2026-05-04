@@ -1,3 +1,4 @@
+using AsmResolver;
 using AsmResolver.DotNet;
 using AsmResolver.DotNet.Code.Cil;
 using AsmResolver.DotNet.Signatures;
@@ -19,7 +20,6 @@ namespace Il2CppDumper
         private readonly Dictionary<Il2CppTypeDefinition, TypeDefinition> typeDefinitionDic = new();
         private readonly Dictionary<Il2CppGenericParameter, GenericParameter> genericParameterDic = new();
         private readonly MethodDefinition attributeAttribute;
-        private readonly CorLibTypeSignature stringType;
         private readonly Dictionary<int, FieldDefinition> fieldDefinitionDic = new();
         private readonly Dictionary<int, PropertyDefinition> propertyDefinitionDic = new();
         private readonly Dictionary<int, MethodDefinition> methodDefinitionDic = new();
@@ -40,7 +40,6 @@ namespace Il2CppDumper
             attributeAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "AttributeAttribute").Methods[0];
             var metadataOffsetAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "MetadataOffsetAttribute").Methods[0];
             var tokenAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "TokenAttribute").Methods[0];
-            stringType = dummyModule.CorLibTypeFactory.String;
 
             var resolver = new MyAssemblyResolver();
             resolver.Register(il2CppDummyDll);
@@ -111,9 +110,12 @@ namespace Il2CppDumper
                     if (addToken)
                     {
                         var sig = new CustomAttributeSignature();
+                        var moduleString = typeDefinition.DeclaringModule!.CorLibTypeFactory.String;
                         sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                            CustomAttributeArgumentMemberType.Field, "Token",
-                            stringType, StringArg($"0x{typeDef.token:X}")));
+                            CustomAttributeArgumentMemberType.Field, 
+                            "Token",
+                            moduleString, 
+                            new CustomAttributeArgument(moduleString, (Utf8String)$"0x{typeDef.token:X}")));
                         typeDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                     }
 
@@ -154,6 +156,7 @@ namespace Il2CppDumper
                     var typeDef = metadata.typeDefs[index];
                     var typeDefinition = typeDefinitionDic[typeDef];
                     var corLib = typeDefinition.DeclaringModule!.CorLibTypeFactory;
+                    var moduleString = corLib.String;
 
                     // fields
                     var fieldEnd = typeDef.fieldStart + typeDef.field_count;
@@ -171,8 +174,10 @@ namespace Il2CppDumper
                         {
                             var sig = new CustomAttributeSignature();
                             sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                CustomAttributeArgumentMemberType.Field, "Token",
-                                stringType, StringArg($"0x{fieldDef.token:X}")));
+                                CustomAttributeArgumentMemberType.Field, 
+                                "Token",
+                                moduleString,
+                                new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fieldDef.token:X}")));
                             fieldDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                         }
 
@@ -187,8 +192,10 @@ namespace Il2CppDumper
                             {
                                 var sig = new CustomAttributeSignature();
                                 sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "Offset",
-                                    stringType, StringArg($"0x{value:X}")));
+                                    CustomAttributeArgumentMemberType.Field, 
+                                    "Offset",
+                                    moduleString, 
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{value:X}")));
                                 fieldDefinition.CustomAttributes.Add(new CustomAttribute(metadataOffsetAttribute, sig));
                             }
                         }
@@ -201,8 +208,10 @@ namespace Il2CppDumper
                             {
                                 var sig = new CustomAttributeSignature();
                                 sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "Offset",
-                                    stringType, StringArg($"0x{fieldOffset:X}")));
+                                    CustomAttributeArgumentMemberType.Field, 
+                                    "Offset",
+                                    moduleString, 
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fieldOffset:X}")));
                                 fieldDefinition.CustomAttributes.Add(new CustomAttribute(fieldOffsetAttribute, sig));
                             }
                         }
@@ -271,8 +280,10 @@ namespace Il2CppDumper
                                 {
                                     var sig = new CustomAttributeSignature();
                                     sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                        CustomAttributeArgumentMemberType.Field, "Offset",
-                                        stringType, StringArg($"0x{value:X}")));
+                                         CustomAttributeArgumentMemberType.Field, 
+                                         "Offset",
+                                         moduleString, 
+                                         new CustomAttributeArgument(moduleString, (Utf8String)$"0x{value:X}")));
                                     parameterDefinition.CustomAttributes.Add(new CustomAttribute(metadataOffsetAttribute, sig));
                                 }
                             }
@@ -282,8 +293,10 @@ namespace Il2CppDumper
                         {
                             var sig = new CustomAttributeSignature();
                             sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                CustomAttributeArgumentMemberType.Field, "Token",
-                                stringType, StringArg($"0x{methodDef.token:X}")));
+                                 CustomAttributeArgumentMemberType.Field,
+                                 "Token",
+                                 moduleString,
+                                 new CustomAttributeArgument(moduleString, (Utf8String)$"0x{methodDef.token:X}")));
                             methodDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                         }
 
@@ -324,20 +337,29 @@ namespace Il2CppDumper
                             {
                                 var fixedMethodPointer = il2Cpp.GetRVA(methodPointer);
                                 var sig = new CustomAttributeSignature();
+
                                 sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "RVA",
-                                    stringType, StringArg($"0x{fixedMethodPointer:X}")));
+                                     CustomAttributeArgumentMemberType.Field,
+                                     "RVA",
+                                     moduleString,
+                                     new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fixedMethodPointer:X}")));
                                 sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "Offset",
-                                    stringType, StringArg($"0x{il2Cpp.MapVATR(methodPointer):X}")));
+                                     CustomAttributeArgumentMemberType.Field,
+                                     "Offset",
+                                     moduleString,
+                                     new CustomAttributeArgument(moduleString, (Utf8String)$"0x{il2Cpp.MapVATR(methodPointer):X}")));
                                 sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "VA",
-                                    stringType, StringArg($"0x{methodPointer:X}")));
+                                     CustomAttributeArgumentMemberType.Field,
+                                     "VA",
+                                     moduleString,
+                                     new CustomAttributeArgument(moduleString, (Utf8String)$"0x{methodPointer:X}")));
                                 if (methodDef.slot != ushort.MaxValue)
                                 {
                                     sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                        CustomAttributeArgumentMemberType.Field, "Slot",
-                                        stringType, StringArg(methodDef.slot.ToString())));
+                                         CustomAttributeArgumentMemberType.Field,
+                                         "Slot",
+                                         moduleString,
+                                         new CustomAttributeArgument(moduleString, (Utf8String)methodDef.slot.ToString())));
                                 }
                                 methodDefinition.CustomAttributes.Add(new CustomAttribute(addressAttribute, sig));
                             }
@@ -382,8 +404,10 @@ namespace Il2CppDumper
                         {
                             var sig = new CustomAttributeSignature();
                             sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                CustomAttributeArgumentMemberType.Field, "Token",
-                                stringType, StringArg($"0x{propertyDef.token:X}")));
+                                CustomAttributeArgumentMemberType.Field,
+                                "Token",
+                                moduleString,
+                                new CustomAttributeArgument(moduleString, (Utf8String)$"0x{propertyDef.token:X}")));
                             propertyDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                         }
                     }
@@ -413,8 +437,10 @@ namespace Il2CppDumper
                         {
                             var sig = new CustomAttributeSignature();
                             sig.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                CustomAttributeArgumentMemberType.Field, "Token",
-                                stringType, StringArg($"0x{eventDef.token:X}")));
+                                CustomAttributeArgumentMemberType.Field,
+                                "Token",
+                                moduleString,
+                                new CustomAttributeArgument(moduleString, (Utf8String)$"0x{eventDef.token:X}")));
                             eventDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                         }
                     }
@@ -431,14 +457,15 @@ namespace Il2CppDumper
                     {
                         var typeDef = metadata.typeDefs[index];
                         var typeDefinition = typeDefinitionDic[typeDef];
+                        var assemblyName = typeDefinition.DeclaringModule?.Assembly?.Name;
 
-                        CreateCustomAttribute(imageDef, typeDef.customAttributeIndex, typeDef.token, typeDefinition.CustomAttributes);
+                        CreateCustomAttribute(imageDef, typeDef.customAttributeIndex, typeDef.token, typeDefinition.CustomAttributes, assemblyName);
 
                         var fieldEnd = typeDef.fieldStart + typeDef.field_count;
                         for (var i = typeDef.fieldStart; i < fieldEnd; ++i)
                         {
                             var fieldDef = metadata.fieldDefs[i];
-                            CreateCustomAttribute(imageDef, fieldDef.customAttributeIndex, fieldDef.token, fieldDefinitionDic[i].CustomAttributes);
+                            CreateCustomAttribute(imageDef, fieldDef.customAttributeIndex, fieldDef.token, fieldDefinitionDic[i].CustomAttributes, assemblyName);
                         }
 
                         var methodEnd = typeDef.methodStart + typeDef.method_count;
@@ -446,13 +473,13 @@ namespace Il2CppDumper
                         {
                             var methodDef = metadata.methodDefs[i];
                             var methodDefinition = methodDefinitionDic[i];
-                            CreateCustomAttribute(imageDef, methodDef.customAttributeIndex, methodDef.token, methodDefinition.CustomAttributes);
+                            CreateCustomAttribute(imageDef, methodDef.customAttributeIndex, methodDef.token, methodDefinition.CustomAttributes, assemblyName);
 
                             for (var j = 0; j < methodDef.parameterCount; ++j)
                             {
                                 var parameterDef = metadata.parameterDefs[methodDef.parameterStart + j];
                                 CreateCustomAttribute(imageDef, parameterDef.customAttributeIndex, parameterDef.token,
-                                    parameterDefinitionDic[methodDef.parameterStart + j].CustomAttributes);
+                                    parameterDefinitionDic[methodDef.parameterStart + j].CustomAttributes, assemblyName);
                             }
                         }
 
@@ -460,21 +487,21 @@ namespace Il2CppDumper
                         for (var i = typeDef.propertyStart; i < propertyEnd; ++i)
                         {
                             var propertyDef = metadata.propertyDefs[i];
-                            CreateCustomAttribute(imageDef, propertyDef.customAttributeIndex, propertyDef.token, propertyDefinitionDic[i].CustomAttributes);
+                            CreateCustomAttribute(imageDef, propertyDef.customAttributeIndex, propertyDef.token, propertyDefinitionDic[i].CustomAttributes, assemblyName);
                         }
 
                         var eventEnd = typeDef.eventStart + typeDef.event_count;
                         for (var i = typeDef.eventStart; i < eventEnd; ++i)
                         {
                             var eventDef = metadata.eventDefs[i];
-                            CreateCustomAttribute(imageDef, eventDef.customAttributeIndex, eventDef.token, eventDefinitionDic[i].CustomAttributes);
+                            CreateCustomAttribute(imageDef, eventDef.customAttributeIndex, eventDef.token, eventDefinitionDic[i].CustomAttributes, assemblyName);
                         }
                     }
                 }
             }
         }
 
-        private void CreateCustomAttribute(Il2CppImageDefinition imageDef, int customAttributeIndex, uint token, IList<CustomAttribute> customAttributes)
+        private void CreateCustomAttribute(Il2CppImageDefinition imageDef, int customAttributeIndex, uint token, IList<CustomAttribute> customAttributes, string? ownerAssemblyName = null)
         {
             var attributeIndex = metadata.GetCustomAttributeIndex(imageDef, customAttributeIndex, token);
             if (attributeIndex >= 0)
@@ -494,19 +521,29 @@ namespace Il2CppDumper
                             {
                                 var methodPointer = executor.customAttributeGenerators[attributeIndex];
                                 var fixedMethodPointer = il2Cpp.GetRVA(methodPointer);
+                                var moduleString = typeDefinition.DeclaringModule!.CorLibTypeFactory.String;
 
-                                var signature = new CustomAttributeSignature();
-                                signature.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "Name",
-                                    stringType, StringArg(typeDefinition.Name)));
-                                signature.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "RVA",
-                                    stringType, StringArg($"0x{fixedMethodPointer:X}")));
-                                signature.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                    CustomAttributeArgumentMemberType.Field, "Offset",
-                                    stringType, StringArg($"0x{il2Cpp.MapVATR(methodPointer):X}")));
+                                var sig = new CustomAttributeSignature();
 
-                                customAttributes.Add(new CustomAttribute(attributeAttribute, signature));
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field,
+                                    "Name",
+                                    moduleString,
+                                    new CustomAttributeArgument(moduleString, typeDefinition.Name)));
+
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field,
+                                    "RVA",
+                                    moduleString,
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fixedMethodPointer:X}")));
+
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field,
+                                    "Offset",
+                                    moduleString,
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{il2Cpp.MapVATR(methodPointer):X}")));
+
+                                customAttributes.Add(new CustomAttribute(attributeAttribute, sig));
                             }
                         }
                     }
@@ -561,7 +598,7 @@ namespace Il2CppDumper
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
                     ExtensionMethods.logger.LogError($"Error while restoring attributeIndex {attributeIndex}");
                 }
