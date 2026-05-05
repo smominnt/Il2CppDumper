@@ -1,14 +1,17 @@
-using Mono.Cecil;
-using Mono.Cecil.Cil;
-using Mono.Collections.Generic;
+using AsmResolver;
+using AsmResolver.DotNet;
+using AsmResolver.DotNet.Code.Cil;
+using AsmResolver.DotNet.Collections;
+using AsmResolver.DotNet.Signatures;
+using AsmResolver.PE.DotNet.Cil;
+using AsmResolver.PE.DotNet.Metadata.Tables;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 
 namespace Il2CppDumper
 {
-    public class DummyAssemblyGenerator
+    public partial class DummyAssemblyGenerator
     {
         public List<AssemblyDefinition> Assemblies = new();
 
@@ -18,101 +21,89 @@ namespace Il2CppDumper
         private readonly Dictionary<Il2CppTypeDefinition, TypeDefinition> typeDefinitionDic = new();
         private readonly Dictionary<Il2CppGenericParameter, GenericParameter> genericParameterDic = new();
         private readonly MethodDefinition attributeAttribute;
-        private readonly TypeReference stringType;
-        private readonly TypeSystem typeSystem;
         private readonly Dictionary<int, FieldDefinition> fieldDefinitionDic = new();
         private readonly Dictionary<int, PropertyDefinition> propertyDefinitionDic = new();
         private readonly Dictionary<int, MethodDefinition> methodDefinitionDic = new();
 
+
         public DummyAssemblyGenerator(Il2CppExecutor il2CppExecutor, bool addToken)
         {
-            executor = il2CppExecutor;
-            metadata = il2CppExecutor.metadata;
-            il2Cpp = il2CppExecutor.il2Cpp;
+            this.executor = il2CppExecutor;
+            this.metadata = il2CppExecutor.metadata;
+            this.il2Cpp = il2CppExecutor.il2Cpp;
 
-            //Il2CppDummyDll
-            var il2CppDummyDll = AssemblyDefinition.ReadAssembly(new MemoryStream(Resource1.Il2CppDummyDll));
+            // Il2CppDummyDll from embedded resource
+            var il2CppDummyDll = AssemblyDefinition.FromBytes(Resource1.Il2CppDummyDll);
             Assemblies.Add(il2CppDummyDll);
-            var dummyMD = il2CppDummyDll.MainModule;
-            var addressAttribute = dummyMD.Types.First(x => x.Name == "AddressAttribute").Methods[0];
-            var fieldOffsetAttribute = dummyMD.Types.First(x => x.Name == "FieldOffsetAttribute").Methods[0];
-            attributeAttribute = dummyMD.Types.First(x => x.Name == "AttributeAttribute").Methods[0];
-            var metadataOffsetAttribute = dummyMD.Types.First(x => x.Name == "MetadataOffsetAttribute").Methods[0];
-            var tokenAttribute = dummyMD.Types.First(x => x.Name == "TokenAttribute").Methods[0];
-            stringType = dummyMD.TypeSystem.String;
-            typeSystem = dummyMD.TypeSystem;
+            ModuleDefinition dummyModule = il2CppDummyDll.ManifestModule!;
+            MethodDefinition addressAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "AddressAttribute").Methods[0];
+            MethodDefinition fieldOffsetAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "FieldOffsetAttribute").Methods[0];
+            MethodDefinition metadataOffsetAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "MetadataOffsetAttribute").Methods[0];
+            MethodDefinition tokenAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "TokenAttribute").Methods[0];
+            this.attributeAttribute = dummyModule.TopLevelTypes.First(x => x.Name == "AttributeAttribute").Methods[0];
 
             var resolver = new MyAssemblyResolver();
-            var moduleParameters = new ModuleParameters
-            {
-                Kind = ModuleKind.Dll,
-                AssemblyResolver = resolver
-            };
             resolver.Register(il2CppDummyDll);
 
             var parameterDefinitionDic = new Dictionary<int, ParameterDefinition>();
             var eventDefinitionDic = new Dictionary<int, EventDefinition>();
 
-            //创建程序集，同时创建所有类
+            // Pass 1: create assemblies and all types
             foreach (var imageDef in metadata.imageDefs)
             {
-                var imageName = metadata.GetStringFromIndex(imageDef.nameIndex);
-                var aname = metadata.assemblyDefs[imageDef.assemblyIndex].aname;
-                var assemblyName = metadata.GetStringFromIndex(aname.nameIndex);
-                Version vers;
-                if (aname.build >= 0)
+                string imageName = metadata.GetStringFromIndex(imageDef.nameIndex);
+                Il2CppAssemblyNameDefinition aname = metadata.assemblyDefs[imageDef.assemblyIndex].aname;
+                string assemblyName = metadata.GetStringFromIndex(aname.nameIndex);
+
+                Version vers = aname.build > 0
+                    ? new Version(aname.major, aname.minor, aname.build, aname.revision)
+                    : new Version(3, 7, 1, 6);
+
+                var assemblyDefinition = new AssemblyDefinition(assemblyName, vers);
+                var corLibRef = new AssemblyReference("mscorlib", new Version(4, 0, 0, 0));
+                var moduleDefinition = new ModuleDefinition(imageName, corLibRef)
                 {
-                    vers = new Version(aname.major, aname.minor, aname.build, aname.revision);
-                }
-                else
-                {
-                    //__Generated
-                    vers = new Version(3, 7, 1, 6);
-                }
-                var assemblyNameDef = new AssemblyNameDefinition(assemblyName, vers);
-                /*assemblyNameDef.Culture = metadata.GetStringFromIndex(aname.cultureIndex);
-                assemblyNameDef.PublicKey = Encoding.UTF8.GetBytes(metadata.GetStringFromIndex(aname.publicKeyIndex));
-                assemblyNameDef.HashAlgorithm = (AssemblyHashAlgorithm)aname.hash_alg;
-                assemblyNameDef.Attributes = (AssemblyAttributes)aname.flags;
-                assemblyNameDef.PublicKeyToken = aname.public_key_token;*/
-                var assemblyDefinition = AssemblyDefinition.CreateAssembly(assemblyNameDef, imageName, moduleParameters);
+                    MetadataResolver = new DefaultMetadataResolver(resolver)
+                };
+                assemblyDefinition.Modules.Add(moduleDefinition);
                 resolver.Register(assemblyDefinition);
                 Assemblies.Add(assemblyDefinition);
-                var moduleDefinition = assemblyDefinition.MainModule;
-                moduleDefinition.Types.Clear();//清除自动创建的<Module>类
+
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
                 for (var index = imageDef.typeStart; index < typeEnd; ++index)
                 {
-                    var typeDef = metadata.typeDefs[index];
-                    var namespaceName = metadata.GetStringFromIndex(typeDef.namespaceIndex);
-                    var typeName = metadata.GetStringFromIndex(typeDef.nameIndex);
+                    Il2CppTypeDefinition typeDef = metadata.typeDefs[index];
+                    string namespaceName = metadata.GetStringFromIndex(typeDef.namespaceIndex);
+                    string typeName = metadata.GetStringFromIndex(typeDef.nameIndex);
                     var typeDefinition = new TypeDefinition(namespaceName, typeName, (TypeAttributes)typeDef.flags);
                     typeDefinitionDic.Add(typeDef, typeDefinition);
+
                     if (typeDef.declaringTypeIndex == -1)
                     {
-                        moduleDefinition.Types.Add(typeDefinition);
+                        moduleDefinition.TopLevelTypes.Add(typeDefinition);
                     }
                 }
             }
+
+            // Pass 2: nested types
             foreach (var imageDef in metadata.imageDefs)
             {
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
                 for (var index = imageDef.typeStart; index < typeEnd; ++index)
                 {
-                    var typeDef = metadata.typeDefs[index];
-                    var typeDefinition = typeDefinitionDic[typeDef];
-
-                    //nestedtype
+                    Il2CppTypeDefinition typeDef = metadata.typeDefs[index];
+                    TypeDefinition typeDefinition = typeDefinitionDic[typeDef];
                     for (int i = 0; i < typeDef.nested_type_count; i++)
                     {
-                        var nestedIndex = metadata.nestedTypeIndices[typeDef.nestedTypesStart + i];
-                        var nestedTypeDef = metadata.typeDefs[nestedIndex];
-                        var nestedTypeDefinition = typeDefinitionDic[nestedTypeDef];
+                        int nestedIndex = metadata.nestedTypeIndices[typeDef.nestedTypesStart + i];
+                        Il2CppTypeDefinition nestedTypeDef = metadata.typeDefs[nestedIndex];
+                        TypeDefinition nestedTypeDefinition = typeDefinitionDic[nestedTypeDef];
                         typeDefinition.NestedTypes.Add(nestedTypeDefinition);
                     }
                 }
             }
-            //提前处理
+
+            // Pass 3: generic params, base types, interfaces
             foreach (var imageDef in metadata.imageDefs)
             {
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
@@ -123,266 +114,370 @@ namespace Il2CppDumper
 
                     if (addToken)
                     {
-                        var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
-                        customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{typeDef.token:X}")));
-                        typeDefinition.CustomAttributes.Add(customTokenAttribute);
+                        var sig = new CustomAttributeSignature();
+                        CorLibTypeSignature moduleString = typeDefinition.DeclaringModule!.CorLibTypeFactory.String;
+                        sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                            CustomAttributeArgumentMemberType.Field, 
+                            "Token",
+                            moduleString, 
+                            new CustomAttributeArgument(moduleString, (Utf8String)$"0x{typeDef.token:X}")));
+                        typeDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                     }
 
-                    //genericParameter
                     if (typeDef.genericContainerIndex >= 0)
                     {
-                        var genericContainer = metadata.genericContainers[typeDef.genericContainerIndex];
+                        Il2CppGenericContainer genericContainer = metadata.genericContainers[typeDef.genericContainerIndex];
                         for (int i = 0; i < genericContainer.type_argc; i++)
                         {
                             var genericParameterIndex = genericContainer.genericParameterStart + i;
-                            var param = metadata.genericParameters[genericParameterIndex];
-                            var genericParameter = CreateGenericParameter(param, typeDefinition);
-                            typeDefinition.GenericParameters.Add(genericParameter);
+                            Il2CppGenericParameter param = metadata.genericParameters[genericParameterIndex];
+                            CreateGenericParameter(param, typeDefinition);
                         }
                     }
 
-                    //parent
                     if (typeDef.parentIndex >= 0)
                     {
-                        var parentType = il2Cpp.types[typeDef.parentIndex];
-                        var parentTypeRef = GetTypeReference(typeDefinition, parentType);
-                        typeDefinition.BaseType = parentTypeRef;
+                        Il2CppType parentType = il2Cpp.types[typeDef.parentIndex];
+                        typeDefinition.BaseType = GetTypeSignature(typeDefinition, parentType).ToTypeDefOrRef();
                     }
 
-                    //interfaces
                     for (int i = 0; i < typeDef.interfaces_count; i++)
                     {
-                        var interfaceType = il2Cpp.types[metadata.interfaceIndices[typeDef.interfacesStart + i]];
-                        var interfaceTypeRef = GetTypeReference(typeDefinition, interfaceType);
-                        typeDefinition.Interfaces.Add(new InterfaceImplementation(interfaceTypeRef));
+                        Il2CppType interfaceType = il2Cpp.types[metadata.interfaceIndices[typeDef.interfacesStart + i]];
+                        InterfaceImplementation interfaceImpl = new InterfaceImplementation(GetTypeSignature(typeDefinition, interfaceType).ToTypeDefOrRef());
+                        typeDefinition.Interfaces.Add(interfaceImpl);
                     }
                 }
             }
-            //处理field, method, property等等
+
+            // Pass 4: fields, methods, properties, events
             foreach (var imageDef in metadata.imageDefs)
             {
-                var imageName = metadata.GetStringFromIndex(imageDef.nameIndex);
+                string imageName = metadata.GetStringFromIndex(imageDef.nameIndex);
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
                 for (int index = imageDef.typeStart; index < typeEnd; index++)
                 {
-                    var typeDef = metadata.typeDefs[index];
-                    var typeDefinition = typeDefinitionDic[typeDef];
+                    Il2CppTypeDefinition typeDef = metadata.typeDefs[index];
+                    TypeDefinition typeDefinition = typeDefinitionDic[typeDef];
+                    CorLibTypeFactory corLib = typeDefinition.DeclaringModule!.CorLibTypeFactory;
+                    CorLibTypeSignature moduleString = corLib.String;
 
-                    //field
+                    // fields
                     var fieldEnd = typeDef.fieldStart + typeDef.field_count;
                     for (var i = typeDef.fieldStart; i < fieldEnd; ++i)
                     {
-                        var fieldDef = metadata.fieldDefs[i];
-                        var fieldType = il2Cpp.types[fieldDef.typeIndex];
+                        Il2CppFieldDefinition fieldDef = metadata.fieldDefs[i];
+                        Il2CppType fieldType = il2Cpp.types[fieldDef.typeIndex];
+
                         var fieldName = metadata.GetStringFromIndex(fieldDef.nameIndex);
-                        var fieldTypeRef = GetTypeReference(typeDefinition, fieldType);
-                        var fieldDefinition = new FieldDefinition(fieldName, (FieldAttributes)fieldType.attrs, fieldTypeRef);
+                        var fieldSig = new FieldSignature(GetTypeSignature(typeDefinition, fieldType));
+                        var fieldDefinition = new FieldDefinition(fieldName, (FieldAttributes)fieldType.attrs, fieldSig);
+
                         typeDefinition.Fields.Add(fieldDefinition);
                         fieldDefinitionDic.Add(i, fieldDefinition);
 
                         if (addToken)
                         {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
-                            customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{fieldDef.token:X}")));
-                            fieldDefinition.CustomAttributes.Add(customTokenAttribute);
+                            var sig = new CustomAttributeSignature();
+                            sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                CustomAttributeArgumentMemberType.Field, 
+                                "Token",
+                                moduleString,
+                                new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fieldDef.token:X}")));
+                            fieldDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                         }
 
-                        //fieldDefault
                         if (metadata.GetFieldDefaultValueFromIndex(i, out var fieldDefault) && fieldDefault.dataIndex != -1)
                         {
                             if (executor.TryGetDefaultValue(fieldDefault.typeIndex, fieldDefault.dataIndex, out var value))
                             {
-                                fieldDefinition.Constant = value;
+                                fieldDefinition.Constant = new Constant(
+                                    GetConstantTypeCode(value), new DataBlobSignature(SerializeConstant(value)));
                             }
                             else
                             {
-                                var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(metadataOffsetAttribute));
-                                var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{value:X}"));
-                                customAttribute.Fields.Add(offset);
-                                fieldDefinition.CustomAttributes.Add(customAttribute);
+                                var sig = new CustomAttributeSignature();
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field, 
+                                    "Offset",
+                                    moduleString, 
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{value:X}")));
+                                fieldDefinition.CustomAttributes.Add(new CustomAttribute(metadataOffsetAttribute, sig));
                             }
                         }
-                        //fieldOffset
+
                         if (!fieldDefinition.IsLiteral)
                         {
-                            var fieldOffset = il2Cpp.GetFieldOffsetFromIndex(index, i - typeDef.fieldStart, i, typeDefinition.IsValueType, fieldDefinition.IsStatic);
+                            var fieldOffset = il2Cpp.GetFieldOffsetFromIndex(
+                                index, 
+                                i - typeDef.fieldStart, 
+                                i, 
+                                typeDefinition.IsValueType, 
+                                fieldDefinition.IsStatic);
+
                             if (fieldOffset >= 0)
                             {
-                                var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(fieldOffsetAttribute));
-                                var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{fieldOffset:X}"));
-                                customAttribute.Fields.Add(offset);
-                                fieldDefinition.CustomAttributes.Add(customAttribute);
+                                var sig = new CustomAttributeSignature();
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field, 
+                                    "Offset",
+                                    moduleString, 
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fieldOffset:X}")));
+                                fieldDefinition.CustomAttributes.Add(new CustomAttribute(fieldOffsetAttribute, sig));
                             }
                         }
                     }
-                    //method
+
+                    // methods
                     var methodEnd = typeDef.methodStart + typeDef.method_count;
                     for (var i = typeDef.methodStart; i < methodEnd; ++i)
                     {
-                        var methodDef = metadata.methodDefs[i];
+                        Il2CppMethodDefinition methodDef = metadata.methodDefs[i];
                         var methodName = metadata.GetStringFromIndex(methodDef.nameIndex);
-                        var methodDefinition = new MethodDefinition(methodName, (MethodAttributes)methodDef.flags, typeDefinition.Module.ImportReference(typeSystem.Void))
+                        var methodAttrs = (MethodAttributes)methodDef.flags;
+
+                        var hasThis = (methodAttrs & MethodAttributes.Static) == 0;
+                        var isGeneric = methodDef.genericContainerIndex >= 0;
+
+                        var genericCount = isGeneric 
+                            ? metadata.genericContainers[methodDef.genericContainerIndex].type_argc 
+                            : 0;
+
+                        var methodSig = hasThis
+                            ? MethodSignature.CreateInstance(corLib.Void, genericCount, Enumerable.Empty<TypeSignature>())
+                            : MethodSignature.CreateStatic(corLib.Void, genericCount, Enumerable.Empty<TypeSignature>());
+
+                        var methodDefinition = new MethodDefinition(methodName, methodAttrs, methodSig)
                         {
                             ImplAttributes = (MethodImplAttributes)methodDef.iflags
                         };
+
                         typeDefinition.Methods.Add(methodDefinition);
-                        //genericParameter
-                        if (methodDef.genericContainerIndex >= 0)
+
+                        if (isGeneric)
                         {
-                            var genericContainer = metadata.genericContainers[methodDef.genericContainerIndex];
+                            Il2CppGenericContainer genericContainer = metadata.genericContainers[methodDef.genericContainerIndex];
                             for (int j = 0; j < genericContainer.type_argc; j++)
                             {
                                 var genericParameterIndex = genericContainer.genericParameterStart + j;
-                                var param = metadata.genericParameters[genericParameterIndex];
-                                var genericParameter = CreateGenericParameter(param, methodDefinition);
-                                methodDefinition.GenericParameters.Add(genericParameter);
+                                Il2CppGenericParameter param = metadata.genericParameters[genericParameterIndex];
+                                CreateGenericParameter(param, methodDefinition);
                             }
-                        }
-                        var methodReturnType = il2Cpp.types[methodDef.returnType];
-                        var returnType = GetTypeReferenceWithByRef(methodDefinition, methodReturnType);
-                        methodDefinition.ReturnType = returnType;
-
-                        if (addToken)
-                        {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
-                            customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{methodDef.token:X}")));
-                            methodDefinition.CustomAttributes.Add(customTokenAttribute);
                         }
 
-                        if (methodDefinition.HasBody && typeDefinition.BaseType?.FullName != "System.MulticastDelegate")
-                        {
-                            var ilprocessor = methodDefinition.Body.GetILProcessor();
-                            if (returnType.FullName == "System.Void")
-                            {
-                                ilprocessor.Append(ilprocessor.Create(OpCodes.Ret));
-                            }
-                            else if (returnType.IsValueType)
-                            {
-                                var variable = new VariableDefinition(returnType);
-                                methodDefinition.Body.Variables.Add(variable);
-                                ilprocessor.Append(ilprocessor.Create(OpCodes.Ldloca_S, variable));
-                                ilprocessor.Append(ilprocessor.Create(OpCodes.Initobj, returnType));
-                                ilprocessor.Append(ilprocessor.Create(OpCodes.Ldloc_0));
-                                ilprocessor.Append(ilprocessor.Create(OpCodes.Ret));
-                            }
-                            else
-                            {
-                                ilprocessor.Append(ilprocessor.Create(OpCodes.Ldnull));
-                                ilprocessor.Append(ilprocessor.Create(OpCodes.Ret));
-                            }
-                        }
-                        methodDefinitionDic.Add(i, methodDefinition);
-                        //method parameter
+                        Il2CppType methodReturnType = il2Cpp.types[methodDef.returnType];
+                        TypeSignature returnTypeSig = GetTypeSignatureWithByRef(methodDefinition, methodReturnType);
+                        methodDefinition.Signature!.ReturnType = returnTypeSig;
+
+                        // parameters
                         for (var j = 0; j < methodDef.parameterCount; ++j)
                         {
-                            var parameterDef = metadata.parameterDefs[methodDef.parameterStart + j];
+                            Il2CppParameterDefinition parameterDef = metadata.parameterDefs[methodDef.parameterStart + j];
+                            Il2CppType parameterType = il2Cpp.types[parameterDef.typeIndex];
+                            TypeSignature paramTypeSig = GetTypeSignatureWithByRef(methodDefinition, parameterType);
+                            methodDefinition.Signature.ParameterTypes.Add(paramTypeSig);
+
                             var parameterName = metadata.GetStringFromIndex(parameterDef.nameIndex);
-                            var parameterType = il2Cpp.types[parameterDef.typeIndex];
-                            var parameterTypeRef = GetTypeReferenceWithByRef(methodDefinition, parameterType);
-                            var parameterDefinition = new ParameterDefinition(parameterName, (ParameterAttributes)parameterType.attrs, parameterTypeRef);
-                            methodDefinition.Parameters.Add(parameterDefinition);
+                            var parameterDefinition = new ParameterDefinition((ushort)(j + 1), parameterName, (ParameterAttributes)parameterType.attrs);
+
+                            methodDefinition.ParameterDefinitions.Add(parameterDefinition);
                             parameterDefinitionDic.Add(methodDef.parameterStart + j, parameterDefinition);
-                            //ParameterDefault
-                            if (metadata.GetParameterDefaultValueFromIndex(methodDef.parameterStart + j, out var parameterDefault) && parameterDefault.dataIndex != -1)
+
+                            if (metadata.GetParameterDefaultValueFromIndex(methodDef.parameterStart + j, out var parameterDefault) 
+                                && parameterDefault.dataIndex != -1)
                             {
                                 if (executor.TryGetDefaultValue(parameterDefault.typeIndex, parameterDefault.dataIndex, out var value))
                                 {
-                                    parameterDefinition.Constant = value;
+                                    parameterDefinition.Constant = new Constant(
+                                        GetConstantTypeCode(value), 
+                                        new DataBlobSignature(SerializeConstant(value)));
                                 }
                                 else
                                 {
-                                    var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(metadataOffsetAttribute));
-                                    var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{value:X}"));
-                                    customAttribute.Fields.Add(offset);
-                                    parameterDefinition.CustomAttributes.Add(customAttribute);
+                                    var sig = new CustomAttributeSignature();
+                                    sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                         CustomAttributeArgumentMemberType.Field, 
+                                         "Offset",
+                                         moduleString, 
+                                         new CustomAttributeArgument(moduleString, (Utf8String)$"0x{value:X}")));
+                                    parameterDefinition.CustomAttributes.Add(new CustomAttribute(metadataOffsetAttribute, sig));
                                 }
                             }
                         }
-                        //methodAddress
+
+                        if (addToken)
+                        {
+                            var sig = new CustomAttributeSignature();
+                            sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                 CustomAttributeArgumentMemberType.Field,
+                                 "Token",
+                                 moduleString,
+                                 new CustomAttributeArgument(moduleString, (Utf8String)$"0x{methodDef.token:X}")));
+                            methodDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
+                        }
+
+                        // method body
+                        var isDelegate = typeDefinition.BaseType?.FullName == "System.MulticastDelegate";
+                        if (!methodDefinition.IsAbstract && !methodDefinition.IsPInvokeImpl && !isDelegate)
+                        {
+                            var body = new CilMethodBody();
+                            methodDefinition.CilMethodBody = body;
+                            CilInstructionCollection instructions = body.Instructions;
+
+                            if (returnTypeSig.IsTypeOf("System", "Void"))
+                            {
+                                instructions.Add(CilOpCodes.Ret);
+                            }
+                            else if (IsValueType(returnTypeSig))
+                            {
+                                var local = new CilLocalVariable(returnTypeSig);
+                                body.LocalVariables.Add(local);
+                                instructions.Add(CilOpCodes.Ldloca_S, local);
+                                instructions.Add(CilOpCodes.Initobj, returnTypeSig.ToTypeDefOrRef());
+                                instructions.Add(CilOpCodes.Ldloc_0);
+                                instructions.Add(CilOpCodes.Ret);
+                            }
+                            else
+                            {
+                                instructions.Add(CilOpCodes.Ldnull);
+                                instructions.Add(CilOpCodes.Ret);
+                            }
+                        }
+
+                        methodDefinitionDic.Add(i, methodDefinition);
+
                         if (!methodDefinition.IsAbstract)
                         {
                             var methodPointer = il2Cpp.GetMethodPointer(imageName, methodDef);
                             if (methodPointer > 0)
                             {
-                                var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(addressAttribute));
                                 var fixedMethodPointer = il2Cpp.GetRVA(methodPointer);
-                                var rva = new CustomAttributeNamedArgument("RVA", new CustomAttributeArgument(stringType, $"0x{fixedMethodPointer:X}"));
-                                var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{il2Cpp.MapVATR(methodPointer):X}"));
-                                var va = new CustomAttributeNamedArgument("VA", new CustomAttributeArgument(stringType, $"0x{methodPointer:X}"));
-                                customAttribute.Fields.Add(rva);
-                                customAttribute.Fields.Add(offset);
-                                customAttribute.Fields.Add(va);
+                                var sig = new CustomAttributeSignature();
+
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                     CustomAttributeArgumentMemberType.Field,
+                                     "RVA",
+                                     moduleString,
+                                     new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fixedMethodPointer:X}")));
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                     CustomAttributeArgumentMemberType.Field,
+                                     "Offset",
+                                     moduleString,
+                                     new CustomAttributeArgument(moduleString, (Utf8String)$"0x{il2Cpp.MapVATR(methodPointer):X}")));
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                     CustomAttributeArgumentMemberType.Field,
+                                     "VA",
+                                     moduleString,
+                                     new CustomAttributeArgument(moduleString, (Utf8String)$"0x{methodPointer:X}")));
                                 if (methodDef.slot != ushort.MaxValue)
                                 {
-                                    var slot = new CustomAttributeNamedArgument("Slot", new CustomAttributeArgument(stringType, methodDef.slot.ToString()));
-                                    customAttribute.Fields.Add(slot);
+                                    sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                         CustomAttributeArgumentMemberType.Field,
+                                         "Slot",
+                                         moduleString,
+                                         new CustomAttributeArgument(moduleString, (Utf8String)methodDef.slot.ToString())));
                                 }
-                                methodDefinition.CustomAttributes.Add(customAttribute);
+                                methodDefinition.CustomAttributes.Add(new CustomAttribute(addressAttribute, sig));
                             }
                         }
                     }
-                    //property
+
+                    // properties
                     var propertyEnd = typeDef.propertyStart + typeDef.property_count;
                     for (var i = typeDef.propertyStart; i < propertyEnd; ++i)
                     {
-                        var propertyDef = metadata.propertyDefs[i];
+                        Il2CppPropertyDefinition propertyDef = metadata.propertyDefs[i];
                         var propertyName = metadata.GetStringFromIndex(propertyDef.nameIndex);
-                        TypeReference propertyType = null;
-                        MethodDefinition GetMethod = null;
-                        MethodDefinition SetMethod = null;
+
+                        TypeSignature? propertyType = null;
+                        MethodDefinition? getMethod = null;
+                        MethodDefinition? setMethod = null;
+
                         if (propertyDef.get >= 0)
                         {
-                            GetMethod = methodDefinitionDic[typeDef.methodStart + propertyDef.get];
-                            propertyType = GetMethod.ReturnType;
+                            getMethod = methodDefinitionDic[typeDef.methodStart + propertyDef.get];
+                            propertyType = getMethod.Signature!.ReturnType;
                         }
                         if (propertyDef.set >= 0)
                         {
-                            SetMethod = methodDefinitionDic[typeDef.methodStart + propertyDef.set];
-                            propertyType ??= SetMethod.Parameters[0].ParameterType;
+                            setMethod = methodDefinitionDic[typeDef.methodStart + propertyDef.set];
+                            propertyType ??= setMethod.Signature!.ParameterTypes[0];
                         }
-                        var propertyDefinition = new PropertyDefinition(propertyName, (PropertyAttributes)propertyDef.attrs, propertyType)
+
+                        var isInstance = getMethod?.Signature?.HasThis ?? setMethod?.Signature?.HasThis ?? false;
+                        var propertySig = new PropertySignature(
+                            isInstance ? CallingConventionAttributes.HasThis : 0,
+                            propertyType ?? corLib.Void,
+                            Enumerable.Empty<TypeSignature>());
+
+                        var propertyDefinition = new PropertyDefinition(propertyName, (PropertyAttributes)propertyDef.attrs, propertySig);
+                        if (getMethod != null)
                         {
-                            GetMethod = GetMethod,
-                            SetMethod = SetMethod
-                        };
+                            propertyDefinition.Semantics.Add(new MethodSemantics(getMethod, MethodSemanticsAttributes.Getter));
+                        }
+                        if (setMethod != null)
+                        {
+                            propertyDefinition.Semantics.Add(new MethodSemantics(setMethod, MethodSemanticsAttributes.Setter));
+                        }
                         typeDefinition.Properties.Add(propertyDefinition);
                         propertyDefinitionDic.Add(i, propertyDefinition);
 
                         if (addToken)
                         {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
-                            customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{propertyDef.token:X}")));
-                            propertyDefinition.CustomAttributes.Add(customTokenAttribute);
+                            var sig = new CustomAttributeSignature();
+                            sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                CustomAttributeArgumentMemberType.Field,
+                                "Token",
+                                moduleString,
+                                new CustomAttributeArgument(moduleString, (Utf8String)$"0x{propertyDef.token:X}")));
+                            propertyDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                         }
                     }
-                    //event
+
+                    // events
                     var eventEnd = typeDef.eventStart + typeDef.event_count;
                     for (var i = typeDef.eventStart; i < eventEnd; ++i)
                     {
-                        var eventDef = metadata.eventDefs[i];
+                        Il2CppEventDefinition eventDef = metadata.eventDefs[i];
+                        Il2CppType eventType = il2Cpp.types[eventDef.typeIndex];
+                        ITypeDefOrRef eventTypeRef = GetTypeSignature(typeDefinition, eventType).ToTypeDefOrRef();
+
                         var eventName = metadata.GetStringFromIndex(eventDef.nameIndex);
-                        var eventType = il2Cpp.types[eventDef.typeIndex];
-                        var eventTypeRef = GetTypeReference(typeDefinition, eventType);
                         var eventDefinition = new EventDefinition(eventName, (EventAttributes)eventType.attrs, eventTypeRef);
+
                         if (eventDef.add >= 0)
-                            eventDefinition.AddMethod = methodDefinitionDic[typeDef.methodStart + eventDef.add];
+                        {
+                            eventDefinition.Semantics.Add(new MethodSemantics(
+                                methodDefinitionDic[typeDef.methodStart + eventDef.add], MethodSemanticsAttributes.AddOn));
+                        }
                         if (eventDef.remove >= 0)
-                            eventDefinition.RemoveMethod = methodDefinitionDic[typeDef.methodStart + eventDef.remove];
+                        {
+                            eventDefinition.Semantics.Add(new MethodSemantics(
+                                methodDefinitionDic[typeDef.methodStart + eventDef.remove], MethodSemanticsAttributes.RemoveOn));
+                        }
                         if (eventDef.raise >= 0)
-                            eventDefinition.InvokeMethod = methodDefinitionDic[typeDef.methodStart + eventDef.raise];
+                        {
+                            eventDefinition.Semantics.Add(new MethodSemantics(
+                                methodDefinitionDic[typeDef.methodStart + eventDef.raise], MethodSemanticsAttributes.Fire));
+                        }
                         typeDefinition.Events.Add(eventDefinition);
                         eventDefinitionDic.Add(i, eventDefinition);
 
                         if (addToken)
                         {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
-                            customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{eventDef.token:X}")));
-                            eventDefinition.CustomAttributes.Add(customTokenAttribute);
+                            var sig = new CustomAttributeSignature();
+                            sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                CustomAttributeArgumentMemberType.Field,
+                                "Token",
+                                moduleString,
+                                new CustomAttributeArgument(moduleString, (Utf8String)$"0x{eventDef.token:X}")));
+                            eventDefinition.CustomAttributes.Add(new CustomAttribute(tokenAttribute, sig));
                         }
                     }
                 }
             }
-            //第三遍，添加CustomAttribute
+
+            // Pass 5: custom attributes
             if (il2Cpp.Version > 20)
             {
                 foreach (var imageDef in metadata.imageDefs)
@@ -390,176 +485,82 @@ namespace Il2CppDumper
                     var typeEnd = imageDef.typeStart + imageDef.typeCount;
                     for (int index = imageDef.typeStart; index < typeEnd; index++)
                     {
-                        var typeDef = metadata.typeDefs[index];
-                        var typeDefinition = typeDefinitionDic[typeDef];
-                        //typeAttribute
-                        CreateCustomAttribute(imageDef, typeDef.customAttributeIndex, typeDef.token, typeDefinition.Module, typeDefinition.CustomAttributes);
+                        Il2CppTypeDefinition typeDef = metadata.typeDefs[index];
+                        TypeDefinition typeDefinition = typeDefinitionDic[typeDef];
+                        Utf8String assemblyName = typeDefinition.DeclaringModule?.Assembly?.Name;
 
-                        //field
+                        CreateCustomAttribute(
+                            imageDef, 
+                            typeDef.customAttributeIndex, 
+                            typeDef.token, 
+                            typeDefinition.CustomAttributes, 
+                            assemblyName);
+
                         var fieldEnd = typeDef.fieldStart + typeDef.field_count;
                         for (var i = typeDef.fieldStart; i < fieldEnd; ++i)
                         {
-                            var fieldDef = metadata.fieldDefs[i];
-                            var fieldDefinition = fieldDefinitionDic[i];
-                            //fieldAttribute
-                            CreateCustomAttribute(imageDef, fieldDef.customAttributeIndex, fieldDef.token, typeDefinition.Module, fieldDefinition.CustomAttributes);
+                            Il2CppFieldDefinition fieldDef = metadata.fieldDefs[i];
+                            CreateCustomAttribute(
+                                imageDef, 
+                                fieldDef.customAttributeIndex, 
+                                fieldDef.token, 
+                                fieldDefinitionDic[i].CustomAttributes, 
+                                assemblyName);
                         }
 
-                        //method
                         var methodEnd = typeDef.methodStart + typeDef.method_count;
                         for (var i = typeDef.methodStart; i < methodEnd; ++i)
                         {
-                            var methodDef = metadata.methodDefs[i];
-                            var methodDefinition = methodDefinitionDic[i];
-                            //methodAttribute
-                            CreateCustomAttribute(imageDef, methodDef.customAttributeIndex, methodDef.token, typeDefinition.Module, methodDefinition.CustomAttributes);
+                            Il2CppMethodDefinition methodDef = metadata.methodDefs[i];
+                            MethodDefinition methodDefinition = methodDefinitionDic[i];
+                            CreateCustomAttribute(
+                                imageDef, 
+                                methodDef.customAttributeIndex, 
+                                methodDef.token, 
+                                methodDefinition.CustomAttributes, 
+                                assemblyName);
 
-                            //method parameter
                             for (var j = 0; j < methodDef.parameterCount; ++j)
                             {
-                                var parameterDef = metadata.parameterDefs[methodDef.parameterStart + j];
-                                var parameterDefinition = parameterDefinitionDic[methodDef.parameterStart + j];
-                                //parameterAttribute
-                                CreateCustomAttribute(imageDef, parameterDef.customAttributeIndex, parameterDef.token, typeDefinition.Module, parameterDefinition.CustomAttributes);
+                                Il2CppParameterDefinition parameterDef = metadata.parameterDefs[methodDef.parameterStart + j];
+                                CreateCustomAttribute(
+                                    imageDef, 
+                                    parameterDef.customAttributeIndex, 
+                                    parameterDef.token,
+                                    parameterDefinitionDic[methodDef.parameterStart + j].CustomAttributes, 
+                                    assemblyName);
                             }
                         }
 
-                        //property
                         var propertyEnd = typeDef.propertyStart + typeDef.property_count;
                         for (var i = typeDef.propertyStart; i < propertyEnd; ++i)
                         {
-                            var propertyDef = metadata.propertyDefs[i];
-                            var propertyDefinition = propertyDefinitionDic[i];
-                            //propertyAttribute
-                            CreateCustomAttribute(imageDef, propertyDef.customAttributeIndex, propertyDef.token, typeDefinition.Module, propertyDefinition.CustomAttributes);
+                            Il2CppPropertyDefinition propertyDef = metadata.propertyDefs[i];
+                            CreateCustomAttribute(
+                                imageDef, 
+                                propertyDef.customAttributeIndex, 
+                                propertyDef.token, 
+                                propertyDefinitionDic[i].CustomAttributes, 
+                                assemblyName);
                         }
 
-                        //event
                         var eventEnd = typeDef.eventStart + typeDef.event_count;
                         for (var i = typeDef.eventStart; i < eventEnd; ++i)
                         {
-                            var eventDef = metadata.eventDefs[i];
-                            var eventDefinition = eventDefinitionDic[i];
-                            //eventAttribute
-                            CreateCustomAttribute(imageDef, eventDef.customAttributeIndex, eventDef.token, typeDefinition.Module, eventDefinition.CustomAttributes);
+                            Il2CppEventDefinition eventDef = metadata.eventDefs[i];
+                            CreateCustomAttribute(
+                                imageDef, 
+                                eventDef.customAttributeIndex, 
+                                eventDef.token, 
+                                eventDefinitionDic[i].CustomAttributes, 
+                                assemblyName);
                         }
                     }
                 }
             }
         }
 
-        private TypeReference GetTypeReferenceWithByRef(MemberReference memberReference, Il2CppType il2CppType)
-        {
-            var typeReference = GetTypeReference(memberReference, il2CppType);
-            if (il2CppType.byref == 1)
-            {
-                return new ByReferenceType(typeReference);
-            }
-            else
-            {
-                return typeReference;
-            }
-        }
-
-        private TypeReference GetTypeReference(MemberReference memberReference, Il2CppType il2CppType)
-        {
-            var moduleDefinition = memberReference.Module;
-            switch (il2CppType.type)
-            {
-                case Il2CppTypeEnum.IL2CPP_TYPE_OBJECT:
-                    return moduleDefinition.ImportReference(typeSystem.Object);
-                case Il2CppTypeEnum.IL2CPP_TYPE_VOID:
-                    return moduleDefinition.ImportReference(typeSystem.Void);
-                case Il2CppTypeEnum.IL2CPP_TYPE_BOOLEAN:
-                    return moduleDefinition.ImportReference(typeSystem.Boolean);
-                case Il2CppTypeEnum.IL2CPP_TYPE_CHAR:
-                    return moduleDefinition.ImportReference(typeSystem.Char);
-                case Il2CppTypeEnum.IL2CPP_TYPE_I1:
-                    return moduleDefinition.ImportReference(typeSystem.SByte);
-                case Il2CppTypeEnum.IL2CPP_TYPE_U1:
-                    return moduleDefinition.ImportReference(typeSystem.Byte);
-                case Il2CppTypeEnum.IL2CPP_TYPE_I2:
-                    return moduleDefinition.ImportReference(typeSystem.Int16);
-                case Il2CppTypeEnum.IL2CPP_TYPE_U2:
-                    return moduleDefinition.ImportReference(typeSystem.UInt16);
-                case Il2CppTypeEnum.IL2CPP_TYPE_I4:
-                    return moduleDefinition.ImportReference(typeSystem.Int32);
-                case Il2CppTypeEnum.IL2CPP_TYPE_U4:
-                    return moduleDefinition.ImportReference(typeSystem.UInt32);
-                case Il2CppTypeEnum.IL2CPP_TYPE_I:
-                    return moduleDefinition.ImportReference(typeSystem.IntPtr);
-                case Il2CppTypeEnum.IL2CPP_TYPE_U:
-                    return moduleDefinition.ImportReference(typeSystem.UIntPtr);
-                case Il2CppTypeEnum.IL2CPP_TYPE_I8:
-                    return moduleDefinition.ImportReference(typeSystem.Int64);
-                case Il2CppTypeEnum.IL2CPP_TYPE_U8:
-                    return moduleDefinition.ImportReference(typeSystem.UInt64);
-                case Il2CppTypeEnum.IL2CPP_TYPE_R4:
-                    return moduleDefinition.ImportReference(typeSystem.Single);
-                case Il2CppTypeEnum.IL2CPP_TYPE_R8:
-                    return moduleDefinition.ImportReference(typeSystem.Double);
-                case Il2CppTypeEnum.IL2CPP_TYPE_STRING:
-                    return moduleDefinition.ImportReference(typeSystem.String);
-                case Il2CppTypeEnum.IL2CPP_TYPE_TYPEDBYREF:
-                    return moduleDefinition.ImportReference(typeSystem.TypedReference);
-                case Il2CppTypeEnum.IL2CPP_TYPE_CLASS:
-                case Il2CppTypeEnum.IL2CPP_TYPE_VALUETYPE:
-                    {
-                        var typeDef = executor.GetTypeDefinitionFromIl2CppType(il2CppType);
-                        var typeDefinition = typeDefinitionDic[typeDef];
-                        return moduleDefinition.ImportReference(typeDefinition);
-                    }
-                case Il2CppTypeEnum.IL2CPP_TYPE_ARRAY:
-                    {
-                        var arrayType = il2Cpp.MapVATR<Il2CppArrayType>(il2CppType.data.array);
-                        var oriType = il2Cpp.GetIl2CppType(arrayType.etype);
-                        return new ArrayType(GetTypeReference(memberReference, oriType), arrayType.rank);
-                    }
-                case Il2CppTypeEnum.IL2CPP_TYPE_GENERICINST:
-                    {
-                        var genericClass = il2Cpp.MapVATR<Il2CppGenericClass>(il2CppType.data.generic_class);
-                        var typeDef = executor.GetGenericClassTypeDefinition(genericClass);
-                        var typeDefinition = typeDefinitionDic[typeDef];
-                        var genericInstanceType = new GenericInstanceType(moduleDefinition.ImportReference(typeDefinition));
-                        var genericInst = il2Cpp.MapVATR<Il2CppGenericInst>(genericClass.context.class_inst);
-                        var pointers = il2Cpp.MapVATR<ulong>(genericInst.type_argv, genericInst.type_argc);
-                        foreach (var pointer in pointers)
-                        {
-                            var oriType = il2Cpp.GetIl2CppType(pointer);
-                            genericInstanceType.GenericArguments.Add(GetTypeReference(memberReference, oriType));
-                        }
-                        return genericInstanceType;
-                    }
-                case Il2CppTypeEnum.IL2CPP_TYPE_SZARRAY:
-                    {
-                        var oriType = il2Cpp.GetIl2CppType(il2CppType.data.type);
-                        return new ArrayType(GetTypeReference(memberReference, oriType));
-                    }
-                case Il2CppTypeEnum.IL2CPP_TYPE_VAR:
-                    {
-                        if (memberReference is MethodDefinition methodDefinition)
-                        {
-                            return CreateGenericParameter(executor.GetGenericParameteFromIl2CppType(il2CppType), methodDefinition.DeclaringType);
-                        }
-                        var typeDefinition = (TypeDefinition)memberReference;
-                        return CreateGenericParameter(executor.GetGenericParameteFromIl2CppType(il2CppType), typeDefinition);
-                    }
-                case Il2CppTypeEnum.IL2CPP_TYPE_MVAR:
-                    {
-                        var methodDefinition = (MethodDefinition)memberReference;
-                        return CreateGenericParameter(executor.GetGenericParameteFromIl2CppType(il2CppType), methodDefinition);
-                    }
-                case Il2CppTypeEnum.IL2CPP_TYPE_PTR:
-                    {
-                        var oriType = il2Cpp.GetIl2CppType(il2CppType.data.type);
-                        return new PointerType(GetTypeReference(memberReference, oriType));
-                    }
-                default:
-                    throw new NotSupportedException();
-            }
-        }
-
-        private void CreateCustomAttribute(Il2CppImageDefinition imageDef, int customAttributeIndex, uint token, ModuleDefinition moduleDefinition, Collection<CustomAttribute> customAttributes)
+        private void CreateCustomAttribute(Il2CppImageDefinition imageDef, int customAttributeIndex, uint token, IList<CustomAttribute> customAttributes, string? ownerAssemblyName = null)
         {
             var attributeIndex = metadata.GetCustomAttributeIndex(imageDef, customAttributeIndex, token);
             if (attributeIndex >= 0)
@@ -568,155 +569,105 @@ namespace Il2CppDumper
                 {
                     if (il2Cpp.Version < 29)
                     {
-                        var attributeTypeRange = metadata.attributeTypeRanges[attributeIndex];
+                        Il2CppCustomAttributeTypeRange attributeTypeRange = metadata.attributeTypeRanges[attributeIndex];
                         for (int i = 0; i < attributeTypeRange.count; i++)
                         {
-                            var attributeTypeIndex = metadata.attributeTypes[attributeTypeRange.start + i];
-                            var attributeType = il2Cpp.types[attributeTypeIndex];
-                            var typeDef = executor.GetTypeDefinitionFromIl2CppType(attributeType);
-                            var typeDefinition = typeDefinitionDic[typeDef];
-                            if (!TryRestoreCustomAttribute(typeDefinition, moduleDefinition, customAttributes))
+                            int attributeTypeIndex = metadata.attributeTypes[attributeTypeRange.start + i];
+                            Il2CppType attributeType = il2Cpp.types[attributeTypeIndex];
+                            Il2CppTypeDefinition typeDef = executor.GetTypeDefinitionFromIl2CppType(attributeType);
+                            TypeDefinition typeDefinition = typeDefinitionDic[typeDef];
+
+                            if (!TryRestoreCustomAttribute(typeDefinition, customAttributes))
                             {
-                                var methodPointer = executor.customAttributeGenerators[attributeIndex];
-                                var fixedMethodPointer = il2Cpp.GetRVA(methodPointer);
-                                var customAttribute = new CustomAttribute(moduleDefinition.ImportReference(attributeAttribute));
-                                var name = new CustomAttributeNamedArgument("Name", new CustomAttributeArgument(stringType, typeDefinition.Name));
-                                var rva = new CustomAttributeNamedArgument("RVA", new CustomAttributeArgument(stringType, $"0x{fixedMethodPointer:X}"));
-                                var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{il2Cpp.MapVATR(methodPointer):X}"));
-                                customAttribute.Fields.Add(name);
-                                customAttribute.Fields.Add(rva);
-                                customAttribute.Fields.Add(offset);
-                                customAttributes.Add(customAttribute);
+                                ulong methodPointer = executor.customAttributeGenerators[attributeIndex];
+                                ulong fixedMethodPointer = il2Cpp.GetRVA(methodPointer);
+
+                                CorLibTypeSignature moduleString = typeDefinition.DeclaringModule!.CorLibTypeFactory.String;
+                                var sig = new CustomAttributeSignature();
+
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field,
+                                    "Name",
+                                    moduleString,
+                                    new CustomAttributeArgument(moduleString, typeDefinition.Name)));
+
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field,
+                                    "RVA",
+                                    moduleString,
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{fixedMethodPointer:X}")));
+
+                                sig.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                    CustomAttributeArgumentMemberType.Field,
+                                    "Offset",
+                                    moduleString,
+                                    new CustomAttributeArgument(moduleString, (Utf8String)$"0x{il2Cpp.MapVATR(methodPointer):X}")));
+
+                                customAttributes.Add(new CustomAttribute(attributeAttribute, sig));
                             }
                         }
                     }
                     else
                     {
-                        var startRange = metadata.attributeDataRanges[attributeIndex];
-                        var endRange = metadata.attributeDataRanges[attributeIndex + 1];
+                        Il2CppCustomAttributeDataRange startRange = metadata.attributeDataRanges[attributeIndex];
+                        Il2CppCustomAttributeDataRange endRange = metadata.attributeDataRanges[attributeIndex + 1];
+
                         metadata.Position = metadata.header.attributeDataOffset + startRange.startOffset;
-                        var buff = metadata.ReadBytes((int)(endRange.startOffset - startRange.startOffset));
-                        var reader = new CustomAttributeDataReader(executor, buff);
+                        byte[] buff = metadata.ReadBytes((int)(endRange.startOffset - startRange.startOffset));
+                        CustomAttributeDataReader reader = new CustomAttributeDataReader(executor, buff);
+
                         if (reader.Count != 0)
                         {
                             for (var i = 0; i < reader.Count; i++)
                             {
-                                var visitor = reader.VisitCustomAttributeData();
-                                var methodDefinition = methodDefinitionDic[visitor.CtorIndex];
-                                var customAttribute = new CustomAttribute(moduleDefinition.ImportReference(methodDefinition));
+                                CustomAttributeReaderVisitor visitor = reader.VisitCustomAttributeData();
+                                MethodDefinition methodDefinition = methodDefinitionDic[visitor.CtorIndex];
+                                CustomAttributeSignature signature = new CustomAttributeSignature();
+
                                 foreach (var argument in visitor.Arguments)
                                 {
-                                    var parameterDefinition = methodDefinition.Parameters[argument.Index];
-                                    var customAttributeArgument = CreateCustomAttributeArgument(parameterDefinition.ParameterType, argument.Value, methodDefinition);
-                                    customAttribute.ConstructorArguments.Add(customAttributeArgument);
+                                    Parameter parameter = methodDefinition.Parameters[argument.Index];
+                                    CustomAttributeArgument arg = CreateCustomAttributeArgument(
+                                        parameter.ParameterType, 
+                                        argument.Value, 
+                                        methodDefinition);
+                                    signature.FixedArguments.Add(arg);
                                 }
+
                                 foreach (var field in visitor.Fields)
                                 {
-                                    var fieldDefinition = fieldDefinitionDic[field.Index];
-                                    var customAttributeArgument = CreateCustomAttributeArgument(fieldDefinition.FieldType, field.Value, fieldDefinition);
-                                    var customAttributeNamedArgument = new CustomAttributeNamedArgument(fieldDefinition.Name, customAttributeArgument);
-                                    customAttribute.Fields.Add(customAttributeNamedArgument);
+                                    FieldDefinition fieldDefinition = fieldDefinitionDic[field.Index];
+                                    TypeSignature fieldType = fieldDefinition.Signature!.FieldType;
+                                    CustomAttributeArgument arg = CreateCustomAttributeArgument(fieldType, field.Value, methodDefinition);
+                                    signature.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                        CustomAttributeArgumentMemberType.Field,
+                                        fieldDefinition.Name,
+                                        fieldType,
+                                        arg));
                                 }
+
                                 foreach (var property in visitor.Properties)
                                 {
-                                    var propertyDefinition = propertyDefinitionDic[property.Index];
-                                    var customAttributeArgument = CreateCustomAttributeArgument(propertyDefinition.PropertyType, property.Value, propertyDefinition);
-                                    var customAttributeNamedArgument = new CustomAttributeNamedArgument(propertyDefinition.Name, customAttributeArgument);
-                                    customAttribute.Properties.Add(customAttributeNamedArgument);
+                                    PropertyDefinition propertyDefinition = propertyDefinitionDic[property.Index];
+                                    TypeSignature propType = propertyDefinition.Signature!.ReturnType;
+                                    CustomAttributeArgument arg = CreateCustomAttributeArgument(propType, property.Value, methodDefinition);
+                                    signature.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                        CustomAttributeArgumentMemberType.Property,
+                                        propertyDefinition.Name,
+                                        propType,
+                                        arg));
                                 }
-                                customAttributes.Add(customAttribute);
+
+                                customAttributes.Add(new CustomAttribute(methodDefinition, signature));
                             }
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    ExtensionMethods.logger.LogError($"Error while restoring attributeIndex {attributeIndex}");
+                    ExtensionMethods.logger.LogError($"Error while restoring attributeIndex {attributeIndex} | {ex}");
                 }
             }
-        }
-
-        private static bool TryRestoreCustomAttribute(TypeDefinition attributeType, ModuleDefinition moduleDefinition, Collection<CustomAttribute> customAttributes)
-        {
-            if (attributeType.Methods.Count == 1 && attributeType.Name != "CompilerGeneratedAttribute")
-            {
-                var methodDefinition = attributeType.Methods[0];
-                if (methodDefinition.Name == ".ctor" && methodDefinition.Parameters.Count == 0)
-                {
-                    var customAttribute = new CustomAttribute(moduleDefinition.ImportReference(methodDefinition));
-                    customAttributes.Add(customAttribute);
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private GenericParameter CreateGenericParameter(Il2CppGenericParameter param, IGenericParameterProvider iGenericParameterProvider)
-        {
-            if (!genericParameterDic.TryGetValue(param, out var genericParameter))
-            {
-                var genericName = metadata.GetStringFromIndex(param.nameIndex);
-                genericParameter = new GenericParameter(genericName, iGenericParameterProvider)
-                {
-                    Attributes = (GenericParameterAttributes)param.flags
-                };
-                genericParameterDic.Add(param, genericParameter);
-                for (int i = 0; i < param.constraintsCount; ++i)
-                {
-                    var il2CppType = il2Cpp.types[metadata.constraintIndices[param.constraintsStart + i]];
-                    genericParameter.Constraints.Add(new GenericParameterConstraint(GetTypeReference((MemberReference)iGenericParameterProvider, il2CppType)));
-                }
-            }
-            return genericParameter;
-        }
-
-        private CustomAttributeArgument CreateCustomAttributeArgument(TypeReference typeReference, BlobValue blobValue, MemberReference memberReference)
-        {
-            var val = blobValue.Value;
-            if (typeReference.FullName == "System.Object")
-            {
-                if (blobValue.il2CppTypeEnum == Il2CppTypeEnum.IL2CPP_TYPE_IL2CPP_TYPE_INDEX)
-                {
-                    val = new CustomAttributeArgument(memberReference.Module.ImportReference(typeof(Type)), GetTypeReference(memberReference, (Il2CppType)val));
-                }
-                else
-                {
-                    val = new CustomAttributeArgument(GetBlobValueTypeReference(blobValue, memberReference), val);
-                }
-            }
-            else if (val == null)
-            {
-                return new CustomAttributeArgument(typeReference, val);
-            }
-            else if (typeReference is ArrayType arrayType)
-            {
-                var arrayVal = (BlobValue[])val;
-                var array = new CustomAttributeArgument[arrayVal.Length];
-                var elementType = arrayType.ElementType;
-                for (int i = 0; i < arrayVal.Length; i++)
-                {
-                    array[i] = CreateCustomAttributeArgument(elementType, arrayVal[i], memberReference);
-                }
-                val = array;
-            }
-            else if (typeReference.FullName == "System.Type")
-            {
-                val = GetTypeReference(memberReference, (Il2CppType)val);
-            }
-            return new CustomAttributeArgument(typeReference, val);
-        }
-
-        private TypeReference GetBlobValueTypeReference(BlobValue blobValue, MemberReference memberReference)
-        {
-            if (blobValue.EnumType != null)
-            {
-                return GetTypeReference(memberReference, blobValue.EnumType);
-            }
-            var il2CppType = new Il2CppType
-            {
-                type = blobValue.il2CppTypeEnum
-            };
-            return GetTypeReference(memberReference, il2CppType);
         }
     }
 }
