@@ -33,18 +33,42 @@ namespace Il2CppDumper
             using var bw = new BinaryWriter(ms);
             switch (value)
             {
-                case bool v: bw.Write(v); break;
-                case byte v: bw.Write(v); break;
-                case sbyte v: bw.Write(v); break;
-                case short v: bw.Write(v); break;
-                case ushort v: bw.Write(v); break;
-                case int v: bw.Write(v); break;
-                case uint v: bw.Write(v); break;
-                case long v: bw.Write(v); break;
-                case ulong v: bw.Write(v); break;
-                case float v: bw.Write(v); break;
-                case double v: bw.Write(v); break;
-                case char v: bw.Write((ushort)v); break;
+                case bool v: 
+                    bw.Write(v); 
+                    break;
+                case byte v:
+                    bw.Write(v); 
+                    break;
+                case sbyte v: 
+                    bw.Write(v); 
+                    break;
+                case short v: 
+                    bw.Write(v); 
+                    break;
+                case ushort v: 
+                    bw.Write(v); 
+                    break;
+                case int v: 
+                    bw.Write(v); 
+                    break;
+                case uint v: 
+                    bw.Write(v); 
+                    break;
+                case long v: 
+                    bw.Write(v); 
+                    break;
+                case ulong v: 
+                    bw.Write(v); 
+                    break;
+                case float v: 
+                    bw.Write(v); 
+                    break;
+                case double v: 
+                    bw.Write(v); 
+                    break;
+                case char v: 
+                    bw.Write((ushort)v); 
+                    break;
                 case string v:
                     var bytes = Encoding.Unicode.GetBytes(v);
                     bw.Write(bytes);
@@ -53,9 +77,12 @@ namespace Il2CppDumper
             return ms.ToArray();
         }
 
-        private static bool IsValueType(TypeSignature sig) =>
-            sig is not (ByReferenceTypeSignature or PointerTypeSignature or SzArrayTypeSignature
-                or ArrayTypeSignature or GenericParameterSignature)
+        private static bool IsValueType(TypeSignature sig) 
+            => sig is not (ByReferenceTypeSignature 
+                or PointerTypeSignature 
+                or SzArrayTypeSignature 
+                or ArrayTypeSignature 
+                or GenericParameterSignature)
             && sig.IsValueType;
 
     }

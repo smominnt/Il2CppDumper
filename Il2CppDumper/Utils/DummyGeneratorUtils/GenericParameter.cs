@@ -22,6 +22,7 @@ namespace Il2CppDumper
             return new GenericParameterSignature(GenericParameterType.Type, genericParameter.Number);
         }
 
+
         private GenericParameterSignature CreateGenericParameter(Il2CppGenericParameter param, MethodDefinition owner)
         {
             if (!genericParameterDic.TryGetValue(param, out var genericParameter))
@@ -43,8 +44,8 @@ namespace Il2CppDumper
         {
             for (int i = 0; i < param.constraintsCount; i++)
             {
-                var il2CppType = il2Cpp.types[metadata.constraintIndices[param.constraintsStart + i]];
-                var constraintSig = GetTypeSignature(context, il2CppType);
+                Il2CppType il2CppType = il2Cpp.types[metadata.constraintIndices[param.constraintsStart + i]];
+                TypeSignature constraintSig = GetTypeSignature(context, il2CppType);
                 genericParameter.Constraints.Add(new GenericParameterConstraint(constraintSig.ToTypeDefOrRef()));
             }
         }

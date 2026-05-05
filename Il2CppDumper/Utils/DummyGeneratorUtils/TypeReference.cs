@@ -12,8 +12,13 @@ namespace Il2CppDumper
         {
             var typeSig = GetTypeSignature(member, il2CppType);
             if (il2CppType.byref == 1)
+            {
                 return typeSig.MakeByReferenceType();
-            return typeSig;
+            }
+            else
+            {
+                return typeSig;
+            }
         }
 
         private TypeSignature GetTypeSignature(IMetadataMember member, Il2CppType il2CppType)

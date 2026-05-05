@@ -8,8 +8,7 @@ namespace Il2CppDumper
     {
         private readonly Dictionary<string, AssemblyDefinition> _registered = new();
 
-        public MyAssemblyResolver()
-        : base(new ModuleReaderParameters())
+        public MyAssemblyResolver() : base(new ModuleReaderParameters())
         {
         }
 
@@ -18,7 +17,9 @@ namespace Il2CppDumper
         {
             _registered[assembly.Name!] = assembly;
             if (!HasCached(assembly))
+            {
                 AddToCache(assembly, assembly);
+            }
         }
 
         protected override AssemblyDefinition? ResolveImpl(AssemblyDescriptor assembly)
