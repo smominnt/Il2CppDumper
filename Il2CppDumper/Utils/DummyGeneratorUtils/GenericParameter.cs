@@ -44,7 +44,7 @@ namespace Il2CppDumper
         {
             for (int i = 0; i < param.constraintsCount; i++)
             {
-                Il2CppType il2CppType = il2Cpp.types[metadata.constraintIndices[param.constraintsStart + i]];
+                Il2CppType il2CppType = il2Cpp.types[metadata.constraintIndices[param.constraintsStart + i].index];
                 TypeSignature constraintSig = GetTypeSignature(context, il2CppType);
                 genericParameter.Constraints.Add(new GenericParameterConstraint(constraintSig.ToTypeDefOrRef()));
             }
