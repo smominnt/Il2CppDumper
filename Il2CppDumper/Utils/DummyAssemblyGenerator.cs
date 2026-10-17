@@ -104,6 +104,8 @@ namespace Il2CppDumper
             }
 
             // Pass 3: generic params, base types, interfaces
+            TypeDefinition systemEnum = typeDefinitionDic.Values
+                .First(t => t.Namespace == "System" && t.Name == "Enum" && t.DeclaringModule!.Name == "mscorlib.dll");
             foreach (var imageDef in metadata.imageDefs)
             {
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
@@ -135,7 +137,12 @@ namespace Il2CppDumper
                         }
                     }
 
-                    if (typeDef.parentIndex >= 0)
+                    if (il2Cpp.Version >= 35 && typeDef.IsEnum)
+                    {
+                        typeDefinition.BaseType = typeDefinition.DeclaringModule!
+                            .DefaultImporter.ImportType(systemEnum);
+                    }
+                    else if (typeDef.parentIndex >= 0)
                     {
                         Il2CppType parentType = il2Cpp.types[typeDef.parentIndex];
                         typeDefinition.BaseType = GetTypeSignature(typeDefinition, parentType).ToTypeDefOrRef();
