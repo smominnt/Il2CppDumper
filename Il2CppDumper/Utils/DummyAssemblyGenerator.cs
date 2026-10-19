@@ -70,7 +70,7 @@ namespace Il2CppDumper
                 Assemblies.Add(assemblyDefinition);
 
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
-                for (var index = imageDef.typeStart; index < typeEnd; ++index)
+                for (int index = imageDef.typeStart; index < typeEnd; ++index)
                 {
                     Il2CppTypeDefinition typeDef = metadata.typeDefs[index];
                     string namespaceName = metadata.GetStringFromIndex(typeDef.namespaceIndex);
@@ -89,7 +89,7 @@ namespace Il2CppDumper
             foreach (var imageDef in metadata.imageDefs)
             {
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
-                for (var index = imageDef.typeStart; index < typeEnd; ++index)
+                for (int index = imageDef.typeStart; index < typeEnd; ++index)
                 {
                     Il2CppTypeDefinition typeDef = metadata.typeDefs[index];
                     TypeDefinition typeDefinition = typeDefinitionDic[typeDef];
@@ -104,10 +104,12 @@ namespace Il2CppDumper
             }
 
             // Pass 3: generic params, base types, interfaces
+            TypeDefinition systemEnum = typeDefinitionDic.Values
+                .First(t => t.Namespace == "System" && t.Name == "Enum" && t.DeclaringModule!.Name == "mscorlib.dll");
             foreach (var imageDef in metadata.imageDefs)
             {
                 var typeEnd = imageDef.typeStart + imageDef.typeCount;
-                for (var index = imageDef.typeStart; index < typeEnd; ++index)
+                for (int index = imageDef.typeStart; index < typeEnd; ++index)
                 {
                     var typeDef = metadata.typeDefs[index];
                     var typeDefinition = typeDefinitionDic[typeDef];
@@ -135,7 +137,12 @@ namespace Il2CppDumper
                         }
                     }
 
-                    if (typeDef.parentIndex >= 0)
+                    if (il2Cpp.Version >= 35 && typeDef.IsEnum)
+                    {
+                        typeDefinition.BaseType = typeDefinition.DeclaringModule!
+                            .DefaultImporter.ImportType(systemEnum);
+                    }
+                    else if (typeDef.parentIndex >= 0)
                     {
                         Il2CppType parentType = il2Cpp.types[typeDef.parentIndex];
                         typeDefinition.BaseType = GetTypeSignature(typeDefinition, parentType).ToTypeDefOrRef();
@@ -144,8 +151,8 @@ namespace Il2CppDumper
                     for (int i = 0; i < typeDef.interfaces_count; i++)
                     {
                         Il2CppType interfaceType = il2Cpp.types[metadata.interfaceIndices[typeDef.interfacesStart + i]];
-                        InterfaceImplementation interfaceImpl = new InterfaceImplementation(GetTypeSignature(typeDefinition, interfaceType).ToTypeDefOrRef());
-                        typeDefinition.Interfaces.Add(interfaceImpl);
+                        var impl = new InterfaceImplementation(GetTypeSignature(typeDefinition, interfaceType).ToTypeDefOrRef());
+                        typeDefinition.Interfaces.Add(impl);
                     }
                 }
             }
@@ -612,7 +619,10 @@ namespace Il2CppDumper
                         Il2CppCustomAttributeDataRange startRange = metadata.attributeDataRanges[attributeIndex];
                         Il2CppCustomAttributeDataRange endRange = metadata.attributeDataRanges[attributeIndex + 1];
 
-                        metadata.Position = metadata.header.attributeDataOffset + startRange.startOffset;
+                        var attributeDataOffset = il2Cpp.Version < 38
+                            ? metadata.header.attributeDataOffset
+                            : metadata.header.attributeData.offset;
+                        metadata.Position = attributeDataOffset + startRange.startOffset;
                         byte[] buff = metadata.ReadBytes((int)(endRange.startOffset - startRange.startOffset));
                         CustomAttributeDataReader reader = new CustomAttributeDataReader(executor, buff);
 
@@ -620,45 +630,48 @@ namespace Il2CppDumper
                         {
                             for (var i = 0; i < reader.Count; i++)
                             {
-                                CustomAttributeReaderVisitor visitor = reader.VisitCustomAttributeData();
-                                MethodDefinition methodDefinition = methodDefinitionDic[visitor.CtorIndex];
-                                CustomAttributeSignature signature = new CustomAttributeSignature();
-
-                                foreach (var argument in visitor.Arguments)
+                                var iterator = reader.VisitCustomAttributeData();
+                                foreach (var visitor in iterator)
                                 {
-                                    Parameter parameter = methodDefinition.Parameters[argument.Index];
-                                    CustomAttributeArgument arg = CreateCustomAttributeArgument(
-                                        parameter.ParameterType, 
-                                        argument.Value, 
-                                        methodDefinition);
-                                    signature.FixedArguments.Add(arg);
-                                }
+                                    MethodDefinition methodDefinition = methodDefinitionDic[visitor.CtorIndex];
+                                    CustomAttributeSignature signature = new CustomAttributeSignature();
 
-                                foreach (var field in visitor.Fields)
-                                {
-                                    FieldDefinition fieldDefinition = fieldDefinitionDic[field.Index];
-                                    TypeSignature fieldType = fieldDefinition.Signature!.FieldType;
-                                    CustomAttributeArgument arg = CreateCustomAttributeArgument(fieldType, field.Value, methodDefinition);
-                                    signature.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                        CustomAttributeArgumentMemberType.Field,
-                                        fieldDefinition.Name,
-                                        fieldType,
-                                        arg));
-                                }
+                                    foreach (var argument in visitor.Arguments)
+                                    {
+                                        Parameter parameter = methodDefinition.Parameters[argument.Index];
+                                        CustomAttributeArgument arg = CreateCustomAttributeArgument(
+                                            parameter.ParameterType,
+                                            argument.Value,
+                                            methodDefinition);
+                                        signature.FixedArguments.Add(arg);
+                                    }
 
-                                foreach (var property in visitor.Properties)
-                                {
-                                    PropertyDefinition propertyDefinition = propertyDefinitionDic[property.Index];
-                                    TypeSignature propType = propertyDefinition.Signature!.ReturnType;
-                                    CustomAttributeArgument arg = CreateCustomAttributeArgument(propType, property.Value, methodDefinition);
-                                    signature.NamedArguments.Add(new CustomAttributeNamedArgument(
-                                        CustomAttributeArgumentMemberType.Property,
-                                        propertyDefinition.Name,
-                                        propType,
-                                        arg));
-                                }
+                                    foreach (var field in visitor.Fields)
+                                    {
+                                        FieldDefinition fieldDefinition = fieldDefinitionDic[field.Index];
+                                        TypeSignature fieldType = fieldDefinition.Signature!.FieldType;
+                                        CustomAttributeArgument arg = CreateCustomAttributeArgument(fieldType, field.Value, methodDefinition);
+                                        signature.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                            CustomAttributeArgumentMemberType.Field,
+                                            fieldDefinition.Name,
+                                            fieldType,
+                                            arg));
+                                    }
 
-                                customAttributes.Add(new CustomAttribute(methodDefinition, signature));
+                                    foreach (var property in visitor.Properties)
+                                    {
+                                        PropertyDefinition propertyDefinition = propertyDefinitionDic[property.Index];
+                                        TypeSignature propType = propertyDefinition.Signature!.ReturnType;
+                                        CustomAttributeArgument arg = CreateCustomAttributeArgument(propType, property.Value, methodDefinition);
+                                        signature.NamedArguments.Add(new CustomAttributeNamedArgument(
+                                            CustomAttributeArgumentMemberType.Property,
+                                            propertyDefinition.Name,
+                                            propType,
+                                            arg));
+                                    }
+
+                                    customAttributes.Add(new CustomAttribute(methodDefinition, signature));
+                                }
                             }
                         }
                     }
